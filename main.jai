@@ -9,35 +9,55 @@ EditorMode :: enum {
   COLLISION;
 }
 
-g_window_width := 1000;
-g_window_height := 500;
+// This group of constants is all measured in pixels.
+TILE_BORDER_WIDTH :: 1;
+MAX_TILEMAP_WIDTH :: 600;
+MAX_TILEMAP_HEIGHT :: 600;
+TILESET_VERT_DIV_WIDTH :: 2;
+TRAY_HORIZ_DIV_WIDTH :: 2;
+WINDOW_WIDTH :: 1000;
+WINDOW_HEIGHT :: 650;
+TRAY_TEXT_PADDING :: 4;
+
+TILE_HIGHLIGHT_COLORS :: Math.Vector4.[LIGHT_BLUE, GREEN];
+TILE_HIGHLIGHT_COLOR_NAMES :: string.["light blue", "green"];
+COLLISION_COLORS :: Math.Vector4.[YELLOW, RED];
+COLLISION_COLOR_NAMES :: string.["yellow", "red"];
+
+WHITE       :: Math.Vector4.{1, 1, 1, 1};
+BLACK       :: Math.Vector4.{0, 0, 0, 1};
+GRAY        :: Math.Vector4.{0.7, 0.7, 0.7, 1};
+RED         :: Math.Vector4.{1, 0, 0, 1};
+YELLOW      :: Math.Vector4.{1, 1, 0, 1};
+GREEN       :: Math.Vector4.{0, 1, 0, 1};
+LIGHT_BLUE  :: Math.Vector4.{0.22, 0.88, 0.86, 1};
+OCEAN       :: Math.Vector4.{0.2, 0.3, 0.3, 1.0};
+LIGHT_OCEAN :: Math.Vector4.{0.25, 0.35, 0.35, 1.0};
+DARK_OCEAN  :: Math.Vector4.{0.1, 0.2, 0.2, 1.0};
+
 g_tray_height: s64;
-g_tray_text_padding := 4;
 g_should_quit: bool;
 g_tileset: Simp.Texture;
 g_tiles: [..] Simp.Texture;
 g_tile_width: s64;
 g_tile_height: s64;
 g_font: *Simp.Dynamic_Font;
-g_selected_tile_idx: s64 = -1;
-g_selected_tile_x: s64 = -1;
-g_selected_tile_y: s64 = -1;
+g_selected_tile_idx := -1;
+g_selected_tile_x := -1;
+g_selected_tile_y := -1;
 g_editor_mode := EditorMode.TILESET;
-
-TILE_BORDER_WIDTH := 1;
-
-WHITE      :: Math.Vector4.{1, 1, 1, 1};
-BLACK      :: Math.Vector4.{0, 0, 0, 1};
-LIGHT_BLUE :: Math.Vector4.{0.22, 0.88, 0.86, 1};
+g_tile_highlight_colors_idx := 0;
+g_collision_colors_idx := 0;
+g_tilemap_width := -1;
+g_tilemap_height := -1;
+g_tilemap_x := -1;
+g_tilemap_y := -1;
 
 main :: () {
   window := WindowCreation.create_window(
-    window_name="tilemap editor", width=g_window_width, height=g_window_height
+    window_name="tilemap editor", width=WINDOW_WIDTH, height=WINDOW_HEIGHT
   );
   Simp.set_render_target(window);
-
-  ok := init_from_cmd();
-  if !ok return;
 
   g_font = Simp.get_font_at_size("data", "SpaceMono-Regular.ttf", 16);
   if !g_font {
@@ -45,6 +65,9 @@ main :: () {
     return;
   }
   g_tray_height = g_font.character_height;
+
+  ok := init_from_cmd();
+  if !ok return;
 
   while (!g_should_quit) {
     reset_temporary_storage();
@@ -54,9 +77,9 @@ main :: () {
     if !ok print("error: failed to get mouse pointer position\n");
     handle_input(mouse_x, mouse_y);
 
-    Simp.clear_render_target(0.2, 0.3, 0.3, 1.0);
+    Simp.clear_render_target(OCEAN.x, OCEAN.y, OCEAN.z, OCEAN.w);
 
-    draw_tileset_pane();
+    draw_tileset_pane(mouse_x, mouse_y);
     draw_tray(mouse_x, mouse_y);
     draw_tilemap(mouse_x, mouse_y);
 
@@ -108,7 +131,17 @@ init_from_cmd :: () -> success: bool {
     return false;
   }
 
-  bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
+  // Split the tilemap into individual tiles.
+  array_reset(*g_tiles);
+  g_tiles = bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
+
+  // Determine the maximum tilemap size and tilemap start position.
+  g_tilemap_width = MAX_TILEMAP_WIDTH - MAX_TILEMAP_WIDTH % g_tile_width;
+  g_tilemap_height = MAX_TILEMAP_HEIGHT - MAX_TILEMAP_HEIGHT % g_tile_height;
+  x_padding := (WINDOW_WIDTH - g_tileset.width - TILESET_VERT_DIV_WIDTH - g_tilemap_width) / 2;
+  y_padding := (WINDOW_HEIGHT - g_tray_height - TRAY_HORIZ_DIV_WIDTH - g_tilemap_height) / 2;
+  g_tilemap_x = g_tileset.width + TILESET_VERT_DIV_WIDTH + x_padding;
+  g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH + y_padding;
 
   return true;
 }
@@ -131,6 +164,12 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
       } else {
         g_editor_mode = .COLLISION;
       }
+    } else if event.key_code == #char "C" && event.key_pressed {
+      if g_editor_mode == .TILESET {
+        g_tile_highlight_colors_idx = (g_tile_highlight_colors_idx + 1) % TILE_HIGHLIGHT_COLORS.count;
+      } else if g_editor_mode == .COLLISION {
+        g_collision_colors_idx = (g_collision_colors_idx + 1) % COLLISION_COLORS.count;
+      }
     } else if event.key_code == .MOUSE_BUTTON_LEFT {
       if event.key_pressed {
         if g_editor_mode == .TILESET && coord_in_tileset(mouse_x, mouse_y) {
@@ -144,20 +183,20 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
   }
 }
 
-draw_tileset_pane :: () {
+draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
   // Vertical divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
-    cast(float)g_tileset.width, xx (g_tray_height + g_tray_text_padding),
-    xx (g_tileset.width + 2), xx g_window_height,
-    BLACK
+    cast(float)g_tileset.width, xx (g_tray_height + TRAY_TEXT_PADDING),
+    xx (g_tileset.width + TILESET_VERT_DIV_WIDTH), xx WINDOW_HEIGHT,
+    DARK_OCEAN
   );
 
   // Tile set.
   Simp.set_shader_for_images(*g_tileset);
   Simp.immediate_quad(
-    0.0, xx (g_window_height - g_tileset.height),
-    xx g_tileset.width, xx g_window_height,
+    0.0, xx (WINDOW_HEIGHT - g_tileset.height),
+    xx g_tileset.width, xx WINDOW_HEIGHT,
     WHITE
   );
 
@@ -165,59 +204,89 @@ draw_tileset_pane :: () {
   if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 {
     Simp.set_shader_for_color();
     border_x1 := g_selected_tile_x * g_tile_width;
-    border_y1 := g_window_height - (g_selected_tile_y * g_tile_height) - g_tile_height;
+    border_y1 := WINDOW_HEIGHT - (g_selected_tile_y * g_tile_height) - g_tile_height;
     immediate_outline(
       border_x1, border_y1,
       border_x1 + g_tile_width, border_y1 + g_tile_height,
       TILE_BORDER_WIDTH,
-      LIGHT_BLUE
+      TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx]
+    );
+  }
+
+  // Maybe highlight tile under mouse.
+  if coord_in_tileset(mouse_x, mouse_y) {
+    x1 := mouse_x - mouse_x % g_tile_width;
+    y1_rel_tileset_top := WINDOW_HEIGHT - mouse_y;
+    y1 := WINDOW_HEIGHT - (y1_rel_tileset_top - y1_rel_tileset_top % g_tile_height) - g_tile_height;
+    Simp.set_shader_for_color(enable_blend=true);
+    highlight_blue := TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx];
+    highlight_blue.w = 0.5;
+    Simp.immediate_quad(
+      cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
+      highlight_blue
     );
   }
 
   // Lines of text.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
-    0.0, xx (g_window_height - g_tileset.height),
-    xx g_tileset.width, xx (g_window_height - g_tileset.height - 2),
-    BLACK
+    0.0, xx (WINDOW_HEIGHT - g_tileset.height),
+    xx g_tileset.width, xx (WINDOW_HEIGHT - g_tileset.height - 2),
+    DARK_OCEAN
   );
 
-  text := tprint("tile width   : %", g_tile_width);
+  text := tprint("tile width     : %", g_tile_width);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, g_window_height - g_tileset.height - g_font.character_height,
+    0, WINDOW_HEIGHT - g_tileset.height - g_font.character_height,
     WHITE
   );
 
-  text = tprint("tile height  : %", g_tile_height);
+  text = tprint("tile height    : %", g_tile_height);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, g_window_height - g_tileset.height - (g_font.character_height * 2),
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 2),
     WHITE
   );
 
   if g_editor_mode != .TILESET {
-    text = tprint("selected tile: n/a");
+    text = tprint("selected tile  : n/a");
   } else if g_selected_tile_idx >= 0 {
-    text = tprint("selected tile: %", g_selected_tile_idx);
+    text = tprint("selected tile  : %", g_selected_tile_idx);
   } else {
-    text = tprint("selected tile: none");
+    text = tprint("selected tile  : none");
   }
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, g_window_height - g_tileset.height - (g_font.character_height * 3),
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 3),
     WHITE
   );
 
   mode := ifx g_editor_mode == .TILESET then tprint("tile set") else tprint("collision");
-  text = tprint("editor mode  : %", mode);
+  text = tprint("editor mode    : %", mode);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, g_window_height - g_tileset.height - (g_font.character_height * 4),
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 4),
+    WHITE
+  );
+
+  text = tprint("tile highlight : %", TILE_HIGHLIGHT_COLOR_NAMES[g_tile_highlight_colors_idx]);
+  Simp.prepare_text(g_font, text);
+  Simp.draw_prepared_text(
+    g_font,
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 5),
+    WHITE
+  );
+
+  text = tprint("collision color: %", COLLISION_COLOR_NAMES[g_collision_colors_idx]);
+  Simp.prepare_text(g_font, text);
+  Simp.draw_prepared_text(
+    g_font,
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 6),
     WHITE
   );
 }
@@ -226,9 +295,9 @@ draw_tray :: (mouse_x: s64, mouse_y: s64) {
   // Horizontal divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
-    0.0, xx (g_tray_height + g_tray_text_padding),
-    xx g_window_width, xx (g_tray_height + 2),
-    BLACK
+    0.0, xx (g_tray_height + TRAY_TEXT_PADDING),
+    xx WINDOW_WIDTH, xx (g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH),
+    DARK_OCEAN
   );
 
   // Maybe draw position in tile set.
@@ -238,36 +307,56 @@ draw_tray :: (mouse_x: s64, mouse_y: s64) {
     Simp.prepare_text(g_font, text);
     Simp.draw_prepared_text(
       g_font,
-      0, g_tray_text_padding,
+      0, TRAY_TEXT_PADDING,
       WHITE
     );
   }
 }
 
 draw_tilemap :: (mouse_x: s64, mouse_y: s64) {
-  if g_selected_tile_idx >= 0 && g_editor_mode == .TILESET && coord_in_tilemap(mouse_x, mouse_y) {
-    Simp.set_shader_for_images(*g_tiles[g_selected_tile_idx]);
-    x1 := mouse_x - mouse_x % g_tile_width;
-    y1 := mouse_y - mouse_y % g_tile_height;
-    Simp.immediate_quad(
-      cast(float)x1, xx y1,
-      xx (x1 + g_tile_width), xx (y1 + g_tile_height),
-      WHITE
-    );
+  // Draw tilemap placeholder background.
+  Simp.set_shader_for_color();
+  Simp.immediate_quad(
+    cast(float)g_tilemap_x, xx g_tilemap_y,
+    xx (g_tilemap_x + g_tilemap_width), xx (g_tilemap_y + g_tilemap_height),
+    LIGHT_OCEAN
+  );
+
+  // Draw selected tile from tileset or collision.
+  if coord_in_tilemap(mouse_x, mouse_y) {
+    x1 := mouse_x - (mouse_x - g_tilemap_x) % g_tile_width;
+    y1_rel_tileset_top := WINDOW_HEIGHT - mouse_y;
+    y1 := WINDOW_HEIGHT - (y1_rel_tileset_top - y1_rel_tileset_top % g_tile_height) - g_tile_height;
+
+    if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 {
+      Simp.set_shader_for_images(*g_tiles[g_selected_tile_idx]);
+      Simp.immediate_quad(
+        cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
+        WHITE
+      );
+    } else if g_editor_mode == .COLLISION {
+      color := COLLISION_COLORS[g_collision_colors_idx];
+      color.w = 0.5;
+      Simp.set_shader_for_color(enable_blend=true);
+      Simp.immediate_quad(
+        cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
+        color
+      );
+    }
   }
 }
 
 coord_in_tileset :: (x: s64, y: s64) -> bool {
   in := true;
   if x > g_tileset.width in = false;
-  if y < g_window_height - g_tileset.height in = false;
+  if y < WINDOW_HEIGHT - g_tileset.height in = false;
   return in;
 }
 
 coord_in_tilemap :: (x: s64, y: s64) -> bool {
   in := true;
-  if x <= g_tileset.width in = false;
-  if y <= g_tray_height + g_tray_text_padding in = false;
+  if x <= g_tilemap_x || x > g_tilemap_x + g_tilemap_width in = false;
+  if y <= g_tilemap_y || y > g_tilemap_y + g_tilemap_height in = false;
   return in;
 }
 
@@ -276,7 +365,7 @@ get_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   tiles_per_row := g_tileset.width / g_tile_width;
   tile_x := x / g_tile_width;
   // Tile ID 0 is the top-left tile of the tile set.
-  tile_y := (g_window_height - y) / g_tile_height;
+  tile_y := (WINDOW_HEIGHT - y) / g_tile_height;
   return tile_x, tile_y;
 }
 
@@ -307,14 +396,13 @@ immediate_outline :: (x1: s64, y1: s64, x2: s64, y2: s64, width: s64, color: Mat
 }
 
 // Assumes tile width and height divide the bitmap's width and height evenly.
-// Resets `g_tiles`.
-bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) {
+bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) -> [..] Simp.Texture {
   num_tiles := (bitmap.width * bitmap.height) / (tile_width * tile_height);
-  array_reset(*g_tiles);
-  array_reserve(*g_tiles, num_tiles);
+  tiles: [..] Simp.Texture;
+  array_reserve(*tiles, num_tiles);
 
   tile_bitmap: Simp.Bitmap;
-  Simp.bitmap_alloc(*tile_bitmap, xx tile_width, xx tile_height, Simp.Texture_Format.RGBA8);
+  Simp.bitmap_alloc(*tile_bitmap, xx tile_width, xx tile_height, bitmap.format);
   defer Simp.deinit(*tile_bitmap);
 
   bytes_per_pixel := bitmap.data.count / (bitmap.width * bitmap.height);
@@ -337,6 +425,8 @@ bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) {
     texture: Simp.Texture;
     ok := Simp.texture_load_from_bitmap(*texture, *tile_bitmap);
     if !ok print("failed to load texture from tile bitmap\n");
-    array_add(*g_tiles, texture);
+    array_add(*tiles, texture);
   }
+
+  return tiles;
 }
