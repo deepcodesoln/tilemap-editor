@@ -24,6 +24,8 @@ TILE_HIGHLIGHT_COLOR_NAMES :: string.["light blue", "green"];
 COLLISION_COLORS :: Math.Vector4.[YELLOW, RED];
 COLLISION_COLOR_NAMES :: string.["yellow", "red"];
 
+TARGET_FRAME_TIME_S :: 0.0333;
+
 WHITE       :: Math.Vector4.{1, 1, 1, 1};
 BLACK       :: Math.Vector4.{0, 0, 0, 1};
 GRAY        :: Math.Vector4.{0.7, 0.7, 0.7, 1};
@@ -69,7 +71,9 @@ main :: () {
   ok := init_from_cmd();
   if !ok return;
 
+  start_time: float64;
   while (!g_should_quit) {
+    start_time = seconds_since_init();
     reset_temporary_storage();
 
     Input.update_window_events();
@@ -84,6 +88,10 @@ main :: () {
     draw_tilemap(mouse_x, mouse_y);
 
     Simp.swap_buffers(window);
+    dt := seconds_since_init() - start_time;
+    if dt < TARGET_FRAME_TIME_S {
+      sleep_milliseconds(cast(s32)((TARGET_FRAME_TIME_S - dt) * 1000));
+    }
   }
 }
 
