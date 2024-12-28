@@ -54,6 +54,7 @@ g_tilemap_width := -1;
 g_tilemap_height := -1;
 g_tilemap_x := -1;
 g_tilemap_y := -1;
+g_tilemap_tiles: [] u16 = ---;
 
 main :: () {
   window := WindowCreation.create_window(
@@ -143,13 +144,18 @@ init_from_cmd :: () -> success: bool {
   array_reset(*g_tiles);
   g_tiles = bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
 
-  // Determine the maximum tilemap size and tilemap start position.
+  // Set up tilemap properties.
   g_tilemap_width = MAX_TILEMAP_WIDTH - MAX_TILEMAP_WIDTH % g_tile_width;
   g_tilemap_height = MAX_TILEMAP_HEIGHT - MAX_TILEMAP_HEIGHT % g_tile_height;
   x_padding := (WINDOW_WIDTH - g_tileset.width - TILESET_VERT_DIV_WIDTH - g_tilemap_width) / 2;
   y_padding := (WINDOW_HEIGHT - g_tray_height - TRAY_HORIZ_DIV_WIDTH - g_tilemap_height) / 2;
   g_tilemap_x = g_tileset.width + TILESET_VERT_DIV_WIDTH + x_padding;
   g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH + y_padding;
+
+  tilemap_width_tiles := g_tilemap_width / g_tile_width;
+  tilemap_height_tiles := g_tilemap_height / g_tile_height;
+  tilemap_num_tiles := tilemap_width_tiles * tilemap_height_tiles;
+  g_tilemap_tiles = NewArray(tilemap_num_tiles, u16);
 
   return true;
 }
@@ -181,9 +187,15 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
     } else if event.key_code == .MOUSE_BUTTON_LEFT {
       if event.key_pressed {
         if g_editor_mode == .TILESET && coord_in_tileset(mouse_x, mouse_y) {
-          g_selected_tile_x, g_selected_tile_y = get_tile_at(mouse_x, mouse_y);
+          g_selected_tile_x, g_selected_tile_y = get_tileset_tile_at(mouse_x, mouse_y);
           tiles_per_row := g_tileset.width / g_tile_width;
           g_selected_tile_idx = g_selected_tile_y * tiles_per_row + g_selected_tile_x;
+        } else if g_editor_mode == .TILESET && coord_in_tilemap(mouse_x, mouse_y) && g_selected_tile_idx >= 0 {
+          tile_x, tile_y := get_tilemap_tile_at(mouse_x, mouse_y);
+          tiles_per_row := g_tilemap_width / g_tile_width;
+          tile_idx := tile_y * tiles_per_row + tile_x;
+          // We reserve `0` to mean no tile.
+          g_tilemap_tiles[tile_idx] = cast(u16)(g_selected_tile_idx + 1);
         }
         break;
       }
@@ -310,7 +322,7 @@ draw_tray :: (mouse_x: s64, mouse_y: s64) {
 
   // Maybe draw position in tile set.
   if coord_in_tileset(mouse_x, mouse_y) {
-    tile_x, tile_y := get_tile_at(mouse_x, mouse_y);
+    tile_x, tile_y := get_tileset_tile_at(mouse_x, mouse_y);
     text := tprint("tile set: %, %", tile_x, tile_y);
     Simp.prepare_text(g_font, text);
     Simp.draw_prepared_text(
@@ -329,6 +341,22 @@ draw_tilemap :: (mouse_x: s64, mouse_y: s64) {
     xx (g_tilemap_x + g_tilemap_width), xx (g_tilemap_y + g_tilemap_height),
     LIGHT_OCEAN
   );
+
+  // Draw tilemap.
+  for _tileset_idx, tilemap_idx: g_tilemap_tiles {
+    if !_tileset_idx continue; // `0` means no tile.
+    tileset_idx := _tileset_idx - 1;
+    tilemap_idx_x := tilemap_idx % (g_tilemap_width / g_tile_width);
+    tilemap_idx_y := tilemap_idx / (g_tilemap_width / g_tile_width);
+    tilemap_x := g_tilemap_x + tilemap_idx_x * g_tile_width;
+    tilemap_y := g_tilemap_y + g_tilemap_height - tilemap_idx_y * g_tile_height - g_tile_height;
+    Simp.set_shader_for_images(*g_tiles[tileset_idx]);
+    Simp.immediate_quad(
+      cast(float)tilemap_x, xx tilemap_y,
+      xx (tilemap_x + g_tile_width), xx (tilemap_y + g_tile_height),
+      WHITE
+    );
+  }
 
   // Draw selected tile from tileset or collision.
   if coord_in_tilemap(mouse_x, mouse_y) {
@@ -369,11 +397,18 @@ coord_in_tilemap :: (x: s64, y: s64) -> bool {
 }
 
 // Assumes `coord_in_tileset` returned `true` on same frame.
-get_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
-  tiles_per_row := g_tileset.width / g_tile_width;
+get_tileset_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   tile_x := x / g_tile_width;
-  // Tile ID 0 is the top-left tile of the tile set.
+  // Tile ID 0 is the top-left tile of the tileset.
   tile_y := (WINDOW_HEIGHT - y) / g_tile_height;
+  return tile_x, tile_y;
+}
+
+// Assumes `coord_in_tilemap` returned `true` on same fame.
+get_tilemap_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
+  tile_x := (x - g_tilemap_x) / g_tile_width;
+  // Tile ID 0 is the top-lef tile of the tilemap.
+  tile_y := (g_tilemap_y + g_tilemap_height - y) / g_tile_height;
   return tile_x, tile_y;
 }
 
