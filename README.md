@@ -17,6 +17,8 @@ currently subject to change without a corresponding schema version bump.
 
 ## Controls
 
+- `m`: switch editor mode between tileset and collision
+
 **Tileset Mode**
 
 - mouse: select tiles from the tileset and paint them on the tilemap
