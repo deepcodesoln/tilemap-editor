@@ -1,13 +1,16 @@
 #import "Basic"()(MEMORY_DEBUGGER = (OS != .ANDROID));
+File           :: #import "File";
+Input          :: #import "Input";
+Math           :: #import "Math";
+Simp           :: #import "Simp";
 WindowCreation :: #import "Window_Creation";
-Input :: #import "Input";
-Math  :: #import "Math";
-Simp  :: #import "Simp";
 
 EditorMode :: enum {
   TILESET :: 0;
   COLLISION;
 }
+
+SUPPORTED_TILEMAP_VERSION: u16 = 0;
 
 // This group of constants is all measured in pixels.
 TILE_BORDER_WIDTH :: 1;
@@ -37,6 +40,9 @@ OCEAN       :: Math.Vector4.{0.2, 0.3, 0.3, 1.0};
 LIGHT_OCEAN :: Math.Vector4.{0.25, 0.35, 0.35, 1.0};
 DARK_OCEAN  :: Math.Vector4.{0.1, 0.2, 0.2, 1.0};
 
+// `export_tilemap` is sensitive to type byte sizes here. Check that
+// implementation if changing any types here.
+g_tileset_pathname: string;
 g_tray_height: s64;
 g_should_quit: bool;
 g_tileset: Simp.Texture;
@@ -98,10 +104,137 @@ main :: () {
 
 init_from_cmd :: () -> success: bool {
   cmd_args := get_command_line_arguments();
-  if cmd_args.count != 4 {
-    print("usage: % tileset.png tile_width_px tile_height_px\n", cmd_args[0]);
+  if !(cmd_args.count == 2 || cmd_args.count == 4) {
+    print("usage:\n% tileset.png tile_width_px tile_height_px\n% tilemap.bin\n", cmd_args[0], cmd_args[0]);
     return false;
   }
+
+  if cmd_args.count == 2 {
+    return init_from_tilemap(cmd_args);
+  } else {
+    return init_from_tileset(cmd_args);
+  }
+}
+
+// * - format version (u16)
+// * - tileset file name length (s64)
+// * - tileset file name (u8 * above length)
+// * - tile width in pixels (s64)
+// * - tile height in pixels (s64)
+// * - tilemap width in tiles (s64)
+// * - tilemap height in tiles (s64)
+// * - tilemap bytes (u16 * above length)
+
+// Currently only supports tilemap version 0.
+init_from_tilemap :: (cmd_args: [] string) -> bool {
+  tilemap, ok := File.file_open(cmd_args[1]);
+
+  if !ok {
+    print("failed to open tilemap to load from\n");
+    return false;
+  }
+
+  bytes_read: s64;
+  version: u16;
+  num_bytes := size_of(type_of(version));
+  ok, bytes_read = File.file_read(*tilemap, *version, num_bytes);
+  if version != SUPPORTED_TILEMAP_VERSION {
+    print(tprint("supported tilemap version % doesn't match parsed version %\n", SUPPORTED_TILEMAP_VERSION, version));
+    return false;
+  }
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  tileset_filename_length: s64;
+  num_bytes = size_of(type_of(tileset_filename_length));
+  ok, bytes_read = File.file_read(*tilemap, *tileset_filename_length, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  g_tileset_pathname.data = cast(*u8)alloc(tileset_filename_length);
+  g_tileset_pathname.count = tileset_filename_length;
+  ok, bytes_read = File.file_read(*tilemap, g_tileset_pathname.data, tileset_filename_length);
+  if !ok || bytes_read != tileset_filename_length {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  num_bytes = size_of(type_of(g_tile_width));
+  ok, bytes_read = File.file_read(*tilemap, *g_tile_width, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  num_bytes = size_of(type_of(g_tile_height));
+  ok, bytes_read = File.file_read(*tilemap, *g_tile_height, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  tilemap_width_tiles: s64;
+  num_bytes = size_of(type_of(tilemap_width_tiles));
+  ok, bytes_read = File.file_read(*tilemap, *tilemap_width_tiles, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  tilemap_height_tiles: s64;
+  num_bytes = size_of(type_of(tilemap_height_tiles));
+  ok, bytes_read = File.file_read(*tilemap, *tilemap_height_tiles, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  tilemap_length := tilemap_width_tiles * tilemap_height_tiles;
+  g_tilemap_tiles = NewArray(tilemap_length, u16, initialized=false);
+  num_bytes = tilemap_length * size_of(u16);
+  ok, bytes_read = File.file_read(*tilemap, cast(*u8)g_tilemap_tiles.data, num_bytes);
+  if !ok || bytes_read != num_bytes {
+    print("failed to read value or didn't read enough bytes\n");
+  }
+
+  // Load tileset.
+  bitmap: Simp.Bitmap;
+  defer Simp.deinit(*bitmap);
+  ok = Simp.bitmap_load(*bitmap, g_tileset_pathname);
+  if !ok {
+    print("failed to make bitmap from tileset\n");
+    return false;
+  }
+
+   ok = Simp.texture_load_from_bitmap(*g_tileset, *bitmap);
+   if !ok {
+     print("failed to load texture from bitmap\n");
+     return false;
+   }
+
+  // Check that tile size evenly divides tileset.
+  if (g_tileset.width % g_tile_width) || (g_tileset.height % g_tile_height) {
+    print(
+      "tile width and height must evenly divide tile set width and height (%, %)\n",
+      g_tileset.width, g_tileset.height
+    );
+    return false;
+  }
+
+  // Split the tilemap into individual tiles.
+  array_reset(*g_tiles);
+  g_tiles = bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
+
+  // Set up tilemap properties.
+  g_tilemap_width = MAX_TILEMAP_WIDTH - MAX_TILEMAP_WIDTH % g_tile_width;
+  g_tilemap_height = MAX_TILEMAP_HEIGHT - MAX_TILEMAP_HEIGHT % g_tile_height;
+  x_padding := (WINDOW_WIDTH - g_tileset.width - TILESET_VERT_DIV_WIDTH - g_tilemap_width) / 2;
+  y_padding := (WINDOW_HEIGHT - g_tray_height - TRAY_HORIZ_DIV_WIDTH - g_tilemap_height) / 2;
+  g_tilemap_x = g_tileset.width + TILESET_VERT_DIV_WIDTH + x_padding;
+  g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH + y_padding;
+
+  return true;
+}
+
+init_from_tileset :: (cmd_args: [] string) -> bool {
+  g_tileset_pathname = cmd_args[1];
 
   // Load tileset.
   bitmap: Simp.Bitmap;
@@ -183,6 +316,13 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
         g_tile_highlight_colors_idx = (g_tile_highlight_colors_idx + 1) % TILE_HIGHLIGHT_COLORS.count;
       } else if g_editor_mode == .COLLISION {
         g_collision_colors_idx = (g_collision_colors_idx + 1) % COLLISION_COLORS.count;
+      }
+    } else if event.key_code == #char "S" && event.key_pressed {
+      exported_filename, ok := export_tilemap(g_tileset_pathname, g_tilemap_tiles);
+      if !ok {
+        print("failed to export tilemap\n");
+      } else {
+        print(tprint("exported tilemap to %\n", exported_filename));
       }
     } else if event.key_code == .MOUSE_BUTTON_LEFT {
       if event.key_pressed {
@@ -472,4 +612,87 @@ bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) -> [
   }
 
   return tiles;
+}
+
+/**
+ * Write tilemap out as binary in the following order. This documentation is for
+ * format version 0.
+ *
+ * - format version (u16)
+ * - tileset file name length (s64)
+ * - tileset file name (u8 * above length)
+ * - tile width in pixels (s64)
+ * - tile height in pixels (s64)
+ * - tilemap width in tiles (s64)
+ * - tilemap height in tiles (s64)
+ * - tilemap bytes (u16 * above length)
+ */
+export_tilemap :: (tileset_path: string, tilemap: [] u16) -> export_pathname: string, ok: bool {
+  if g_tilemap_tiles.count <= 0 {
+    print("can't export an empty tilemap\n");
+    return "", false;
+  }
+
+  export_pathname :: "tilemap.bin";
+
+  file, ok := File.file_open(export_pathname, for_writing=true);
+  if !ok {
+    print("error opening file for tilemap export\n");
+    return "", false;
+  }
+
+  // Have to write from a variable, not a constant, since Jai may inline constants.
+  tilemap_format_version := SUPPORTED_TILEMAP_VERSION;
+  ok = File.file_write(*file, *tilemap_format_version, size_of(type_of(tilemap_format_version)));
+  if !ok {
+    print("error writing version to file for tilemap export\n");
+    return "", false;
+  }
+
+  ok = File.file_write(*file, *tileset_path.count, size_of(type_of(tileset_path.count)));
+  if !ok {
+    print("error writing tileset path count to file for tilemap export\n");
+    return "", false;
+  }
+
+  ok = File.file_write(*file, tileset_path.data, tileset_path.count);
+  if !ok {
+    print("error writing tileset path to file for tilemap export\n");
+    return "", false;
+  }
+
+  ok = File.file_write(*file, *g_tile_width, size_of(type_of(g_tile_width)));
+  if !ok {
+    print("error writing tile width to file for tilemap export\n");
+    return "", false;
+  }
+
+  ok = File.file_write(*file, *g_tile_height, size_of(type_of(g_tile_height)));
+  if !ok {
+    print("error writing tile height to file for tilemap export\n");
+    return "", false;
+  }
+
+  tilemap_width_tiles := g_tilemap_width / g_tile_width;
+  ok = File.file_write(*file, *tilemap_width_tiles, size_of(type_of(tilemap_width_tiles)));
+  if !ok {
+    print("error writing tilemap width to file for tilemap export\n");
+    return "", false;
+  }
+
+  tilemap_height_tiles := g_tilemap_height / g_tile_height;
+  ok = File.file_write(*file, *tilemap_height_tiles, size_of(type_of(tilemap_height_tiles)));
+  if !ok {
+    print("error writing tilemap height to file for tilemap export\n");
+    return "", false;
+  }
+
+  ok = File.file_write(*file, g_tilemap_tiles.data, size_of(u16) * g_tilemap_tiles.count);
+  if !ok {
+    print("error writing tilemap to file for tilemap export\n");
+    return "", false;
+  }
+
+  File.file_close(*file);
+  return export_pathname, ok;
 }

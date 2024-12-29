@@ -1,4 +1,10 @@
+# Build artifacts.
 .build/
 main
 *.dSYM/
+
+# Exported tilemap files.
+*.bin
+
+# Misc.
 .DS_Store
