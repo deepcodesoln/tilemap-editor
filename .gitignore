@@ -1,6 +1,6 @@
 # Build artifacts.
 .build/
-main
+te
 *.dSYM/
 
 # Exported tilemap files.

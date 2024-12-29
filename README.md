@@ -9,7 +9,7 @@ This project is compatible with at least the Jai 0.2.004 toolchain.
 
 # Usage
 
-Compile with `jai main.jai`; run `./main` to see the usage instructions. You can
+Compile with `jai te.jai`; run `./te` to see the usage instructions. You can
 either load a tileset and blank tilemap or load a previously-exported tilemap.
 
 **Note:** collision information is not currently exported; tilemap schema is
