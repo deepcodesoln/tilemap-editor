@@ -5,14 +5,14 @@ Math           :: #import "Math";
 Simp           :: #import "Simp";
 WindowCreation :: #import "Window_Creation";
 
-EditorMode :: enum {
+EditorFocus :: enum {
   TILESET :: 0;
-  COLLISION;
+  TILEMAP;
 }
 
 Tool :: enum {
-  PAINTER :: 0;
-  ERASER;
+  TILESET_PAINTER :: 0;
+  COLLISION_PAINTER;
 }
 
 SUPPORTED_TILEMAP_VERSION: u16 = 0;
@@ -57,11 +57,10 @@ g_tiles: [..] Simp.Texture;
 g_tile_width: s64;
 g_tile_height: s64;
 g_font: *Simp.Dynamic_Font;
-g_selected_tile_idx := -1;
-g_selected_tile_x := -1;
-g_selected_tile_y := -1;
-g_editor_mode := EditorMode.TILESET;
-g_tool := Tool.PAINTER;
+g_tileset_cursor_idx := 0;
+g_tileset_active_idx := -1;
+g_editor_focus := EditorFocus.TILESET;
+g_tool := Tool.TILESET_PAINTER;
 g_hide_collision := false;
 g_tile_highlight_colors_idx := 0;
 g_collision_colors_idx := 0;
@@ -70,6 +69,7 @@ g_tilemap_height := -1;
 g_tilemap_x := -1;
 g_tilemap_y := -1;
 g_tilemap_tiles: [] u16 = ---;
+g_tilemap_cursor_idx := 0;
 
 main :: () {
   window := WindowCreation.create_window(
@@ -93,15 +93,13 @@ main :: () {
     reset_temporary_storage();
 
     Input.update_window_events();
-    mouse_x, mouse_y, ok := WindowCreation.get_mouse_pointer_position(window, right_handed=true);
-    if !ok print("error: failed to get mouse pointer position\n");
-    handle_input(mouse_x, mouse_y);
+    handle_input();
 
     Simp.clear_render_target(OCEAN.x, OCEAN.y, OCEAN.z, OCEAN.w);
 
-    draw_tileset_pane(mouse_x, mouse_y);
-    draw_tray(mouse_x, mouse_y);
-    draw_tilemap(mouse_x, mouse_y);
+    draw_tileset_pane();
+    draw_tray();
+    draw_tilemap();
 
     Simp.swap_buffers(window);
     dt := seconds_since_init() - start_time;
@@ -211,7 +209,7 @@ init_from_tilemap :: (cmd_args: [] string) -> bool {
   // Check that tile size evenly divides tileset.
   if (g_tileset.width % g_tile_width) || (g_tileset.height % g_tile_height) {
     print(
-      "tile width and height must evenly divide tile set width and height (%, %)\n",
+      "tile width and height must evenly divide tileset width and height (%, %)\n",
       g_tileset.width, g_tileset.height
     );
     return false;
@@ -257,7 +255,7 @@ init_from_tileset :: (cmd_args: [] string) -> bool {
     g_tile_height, ok, remainder = string_to_int(cmd_args[3], T=s32);
   }
   if !ok {
-    print("failed to parse tile set dimensions\n");
+    print("failed to parse tileset dimensions\n");
     return false;
   }
   if remainder.count != 0 {
@@ -266,7 +264,7 @@ init_from_tileset :: (cmd_args: [] string) -> bool {
   }
   if (g_tileset.width % g_tile_width) || (g_tileset.height % g_tile_height) {
     print(
-      "tile width and height must evenly divide tile set width and height (%, %)\n",
+      "tile width and height must evenly divide tileset width and height (%, %)\n",
       g_tileset.width, g_tileset.height
     );
     return false;
@@ -292,7 +290,7 @@ init_from_tileset :: (cmd_args: [] string) -> bool {
   return true;
 }
 
-handle_input :: (mouse_x: s64, mouse_y: s64) {
+handle_input :: () {
   for event : Input.events_this_frame {
     if event.type == .QUIT {
       g_should_quit = true;
@@ -304,26 +302,75 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
         g_should_quit = true;
         break;
       }
-    } else if event.key_code == #char "H" && event.key_pressed {
-      g_hide_collision ^= true;
-    } else if event.key_code == #char "M" && event.key_pressed {
-      if g_editor_mode == .COLLISION {
-        g_editor_mode = .TILESET;
-      } else {
-        g_editor_mode = .COLLISION;
+    } else if event.key_code == .TAB && event.key_pressed {
+      if g_editor_focus == .TILESET g_editor_focus = .TILEMAP;
+      else if g_editor_focus == .TILEMAP g_editor_focus = .TILESET;
+    } else if event.key_code == #char "A" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        g_tileset_active_idx = g_tileset_cursor_idx;
+      } else if g_editor_focus == .TILEMAP {
+        if g_tool == .TILESET_PAINTER && g_tileset_active_idx >= 0 {
+          // We reserve `0` to mean no tile.
+          g_tilemap_tiles[g_tilemap_cursor_idx] =
+            (g_tilemap_tiles[g_tilemap_cursor_idx] & COLLISION_BIT) + cast(u16)(g_tileset_active_idx + 1);
+        } else if g_tool == .COLLISION_PAINTER {
+          g_tilemap_tiles[g_tilemap_cursor_idx] |= COLLISION_BIT;
+        }
       }
     } else if event.key_code == #char "C" && event.key_pressed {
-      if g_editor_mode == .TILESET {
+      if g_tool == .TILESET_PAINTER {
         g_tile_highlight_colors_idx = (g_tile_highlight_colors_idx + 1) % TILE_HIGHLIGHT_COLORS.count;
-      } else if g_editor_mode == .COLLISION {
+      } else if g_tool == .COLLISION_PAINTER {
         g_collision_colors_idx = (g_collision_colors_idx + 1) % COLLISION_COLORS.count;
       }
-    } else if event.key_code == #char "T" && event.key_pressed {
-      if g_tool == .PAINTER {
-        g_tool = .ERASER;
-      } else if g_tool == .ERASER {
-        g_tool = .PAINTER;
+    } else if event.key_code == #char "H" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        width_tiles := g_tileset.width / g_tile_width;
+        x, y := get_tileset_tile_at(g_tileset_cursor_idx);
+        if x - 1 >= 0 g_tileset_cursor_idx -= 1;
+      } else if g_editor_focus == .TILEMAP {
+        width_tiles := g_tilemap_width / g_tile_width;
+        x, y := get_tilemap_tile_at(g_tilemap_cursor_idx);
+        if x - 1 >= 0 g_tilemap_cursor_idx -= 1;
       }
+    } else if event.key_code == #char "J" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        tiles_per_row := g_tileset.width / g_tile_width;
+        height_tiles := g_tileset.height / g_tile_height;
+        x, y := get_tileset_tile_at(g_tileset_cursor_idx);
+        if y + 1 < height_tiles g_tileset_cursor_idx += tiles_per_row;
+      } else if g_editor_focus == .TILEMAP {
+        tiles_per_row := g_tilemap_width / g_tile_width;
+        height_tiles := g_tilemap_height / g_tile_height;
+        x, y := get_tilemap_tile_at(g_tilemap_cursor_idx);
+        if y + 1 < height_tiles g_tilemap_cursor_idx += tiles_per_row;
+      }
+    } else if event.key_code == #char "K" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        tiles_per_row := g_tileset.width / g_tile_width;
+        height_tiles := g_tileset.height / g_tile_height;
+        x, y := get_tileset_tile_at(g_tileset_cursor_idx);
+        if y - 1 >= 0 g_tileset_cursor_idx -= tiles_per_row;
+      } else if g_editor_focus == .TILEMAP {
+        tiles_per_row := g_tilemap_width / g_tile_width;
+        height_tiles := g_tilemap_height / g_tile_height;
+        x, y := get_tilemap_tile_at(g_tilemap_cursor_idx);
+        if y - 1 >= 0 g_tilemap_cursor_idx -= tiles_per_row;
+      }
+    } else if event.key_code == #char "L" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        tiles_per_row := g_tileset.width / g_tile_width;
+        width_tiles := g_tileset.width / g_tile_width;
+        x, y := get_tileset_tile_at(g_tileset_cursor_idx);
+        if x + 1 < tiles_per_row g_tileset_cursor_idx += 1;
+      } else if g_editor_focus == .TILEMAP {
+        tiles_per_row := g_tilemap_width / g_tile_width;
+        width_tiles := g_tilemap_width / g_tile_width;
+        x, y := get_tilemap_tile_at(g_tilemap_cursor_idx);
+        if x + 1 < tiles_per_row g_tilemap_cursor_idx += 1;
+      }
+    } else if event.key_code == #char "Q" && event.key_pressed {
+      g_hide_collision ^= true;
     } else if event.key_code == #char "S" && event.key_pressed {
       exported_filename, ok := export_tilemap(g_tileset_pathname, g_tilemap_tiles);
       if !ok {
@@ -331,34 +378,27 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
       } else {
         print(tprint("exported tilemap to %\n", exported_filename));
       }
-    } else if event.key_code == .MOUSE_BUTTON_LEFT {
-      if event.key_pressed {
-        if g_editor_mode == .TILESET && coord_in_tileset(mouse_x, mouse_y) {
-          g_selected_tile_x, g_selected_tile_y = get_tileset_tile_at(mouse_x, mouse_y);
-          tiles_per_row := g_tileset.width / g_tile_width;
-          g_selected_tile_idx = g_selected_tile_y * tiles_per_row + g_selected_tile_x;
-        } else if coord_in_tilemap(mouse_x, mouse_y) {
-          tile_x, tile_y := get_tilemap_tile_at(mouse_x, mouse_y);
-          tiles_per_row := g_tilemap_width / g_tile_width;
-          tile_idx := tile_y * tiles_per_row + tile_x;
-          if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 && g_tool == .PAINTER {
-            // We reserve `0` to mean no tile.
-            g_tilemap_tiles[tile_idx] = (g_tilemap_tiles[tile_idx] & COLLISION_BIT) + cast(u16)(g_selected_tile_idx + 1);
-          } else if g_editor_mode == .TILESET && g_tool == .ERASER {
-            g_tilemap_tiles[tile_idx] &= COLLISION_BIT;
-          } else if g_editor_mode == .COLLISION && g_tool == .PAINTER {
-            g_tilemap_tiles[tile_idx] |= COLLISION_BIT;
-          } else if g_editor_mode == .COLLISION && g_tool == .ERASER {
-            g_tilemap_tiles[tile_idx] &= ~COLLISION_BIT;
-          }
+    } else if event.key_code == #char "T" && event.key_pressed {
+      if g_tool == .TILESET_PAINTER {
+        g_tool = .COLLISION_PAINTER;
+      } else if g_tool == .COLLISION_PAINTER {
+        g_tool = .TILESET_PAINTER;
+      }
+    } else if event.key_code == #char "X" && event.key_pressed {
+      if g_editor_focus == .TILESET {
+        g_tileset_active_idx = -1;
+      } else if g_editor_focus == .TILEMAP {
+        if g_tool == .TILESET_PAINTER {
+          g_tilemap_tiles[g_tilemap_cursor_idx] &= COLLISION_BIT;
+        } else if g_tool == .COLLISION_PAINTER {
+          g_tilemap_tiles[g_tilemap_cursor_idx] &= ~COLLISION_BIT;
         }
-        break;
       }
     }
   }
 }
 
-draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
+draw_tileset_pane :: () {
   // Vertical divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
@@ -375,11 +415,12 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     WHITE
   );
 
-  // Border around selected tile set.
-  if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 {
+  // Border around active tile in tileset.
+  if g_tileset_active_idx >= 0 {
     Simp.set_shader_for_color();
-    border_x1 := g_selected_tile_x * g_tile_width;
-    border_y1 := WINDOW_HEIGHT - (g_selected_tile_y * g_tile_height) - g_tile_height;
+    x, y := get_tileset_tile_at(g_tileset_active_idx);
+    border_x1 := x * g_tile_width;
+    border_y1 := WINDOW_HEIGHT - (y * g_tile_height) - g_tile_height;
     immediate_outline(
       border_x1, border_y1,
       border_x1 + g_tile_width, border_y1 + g_tile_height,
@@ -388,19 +429,18 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     );
   }
 
-  // Maybe highlight tile under mouse.
-  if coord_in_tileset(mouse_x, mouse_y) {
-    x1 := mouse_x - mouse_x % g_tile_width;
-    y1_rel_tileset_top := WINDOW_HEIGHT - mouse_y;
-    y1 := WINDOW_HEIGHT - (y1_rel_tileset_top - y1_rel_tileset_top % g_tile_height) - g_tile_height;
-    Simp.set_shader_for_color(enable_blend=true);
-    highlight_blue := TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx];
-    highlight_blue.w = 0.5;
-    Simp.immediate_quad(
-      cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
-      highlight_blue
-    );
-  }
+  // Highlight cursor tile in tileset.
+  Simp.set_shader_for_color(enable_blend=true);
+  x, y := get_tileset_tile_at(g_tileset_cursor_idx);
+  border_x1 := x * g_tile_width;
+  border_y1 := WINDOW_HEIGHT - (y * g_tile_height) - g_tile_height;
+  color := TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx];
+  color.w = 0.5;
+  Simp.immediate_quad(
+    cast(float)border_x1, xx border_y1,
+    xx (border_x1 + g_tile_width), xx (border_y1 + g_tile_height),
+    color
+  );
 
   // Lines of text.
   Simp.set_shader_for_color();
@@ -426,13 +466,8 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     WHITE
   );
 
-  if g_editor_mode != .TILESET {
-    text = tprint("selected tile  : n/a");
-  } else if g_selected_tile_idx >= 0 {
-    text = tprint("selected tile  : %", g_selected_tile_idx);
-  } else {
-    text = tprint("selected tile  : none");
-  }
+  x, y = get_tileset_tile_at(g_tileset_cursor_idx);
+  text = tprint("cursor tile    : % (%, %)", g_tileset_cursor_idx, x, y);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
@@ -440,8 +475,12 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     WHITE
   );
 
-  mode := ifx g_editor_mode == .TILESET then tprint("tile set") else tprint("collision");
-  text = tprint("editor mode    : %", mode);
+  if g_tileset_active_idx == -1 {
+    text = tprint("active tile    : none");
+  } else {
+    x, y = get_tileset_tile_at(g_tileset_active_idx);
+    text = tprint("active tile    : % (%, %)", g_tileset_active_idx, x, y);
+  }
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
@@ -449,7 +488,7 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     WHITE
   );
 
-  tool := ifx g_tool == .PAINTER then tprint("painter") else tprint("eraser");
+  tool := ifx g_tool == .TILESET_PAINTER then tprint("tileset painter") else tprint("collision painter");
   text = tprint("tool:          : %", tool);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
@@ -481,9 +520,18 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 8),
     WHITE
   );
+
+  focus := ifx g_editor_focus == .TILESET then tprint("tileset") else tprint("tilemap");
+  text = tprint("editor focus   : %", focus);
+  Simp.prepare_text(g_font, text);
+  Simp.draw_prepared_text(
+    g_font,
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 9),
+    WHITE
+  );
 }
 
-draw_tray :: (mouse_x: s64, mouse_y: s64) {
+draw_tray :: () {
   // Horizontal divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
@@ -491,21 +539,9 @@ draw_tray :: (mouse_x: s64, mouse_y: s64) {
     xx WINDOW_WIDTH, xx (g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH),
     DARK_OCEAN
   );
-
-  // Maybe draw position in tile set.
-  if coord_in_tileset(mouse_x, mouse_y) {
-    tile_x, tile_y := get_tileset_tile_at(mouse_x, mouse_y);
-    text := tprint("tile set: %, %", tile_x, tile_y);
-    Simp.prepare_text(g_font, text);
-    Simp.draw_prepared_text(
-      g_font,
-      0, TRAY_TEXT_PADDING,
-      WHITE
-    );
-  }
 }
 
-draw_tilemap :: (mouse_x: s64, mouse_y: s64) {
+draw_tilemap :: () {
   // Draw tilemap placeholder background.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
@@ -544,54 +580,38 @@ draw_tilemap :: (mouse_x: s64, mouse_y: s64) {
     }
   }
 
-  // Draw selected tile from tileset, collision, or eraser.
-  if coord_in_tilemap(mouse_x, mouse_y) {
-    x1 := mouse_x - (mouse_x - g_tilemap_x) % g_tile_width;
-    y1_rel_tileset_top := WINDOW_HEIGHT - mouse_y;
-    y1 := WINDOW_HEIGHT - (y1_rel_tileset_top - y1_rel_tileset_top % g_tile_height) - g_tile_height;
+  // Maybe draw active tileset tile under cursor; always draw outline.
+  x, y := get_tilemap_tile_at(g_tilemap_cursor_idx);
 
-    if g_tool == .ERASER {
-      color := BLACK;
-      color.w = 0.5;
-      Simp.set_shader_for_color(enable_blend=true);
-      Simp.immediate_quad(
-        cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
-        color
-      );
-    }
-    else if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 {
-      Simp.set_shader_for_images(*g_tiles[g_selected_tile_idx]);
-      Simp.immediate_quad(
-        cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
-        WHITE
-      );
-    } else if g_editor_mode == .COLLISION {
-      color := COLLISION_COLORS[g_collision_colors_idx];
-      color.w = 0.5;
-      Simp.set_shader_for_color(enable_blend=true);
-      Simp.immediate_quad(
-        cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
-        color
-      );
-    }
+  x1 := g_tilemap_x + x * g_tile_width;
+  y1 := (g_tilemap_y + g_tilemap_height) - (y * g_tile_height) - g_tile_height;
+
+  if g_tool == .TILESET_PAINTER && g_tileset_active_idx >= 0 {
+    Simp.set_shader_for_images(*g_tiles[g_tileset_active_idx]);
+    Simp.immediate_quad(
+      cast(float)x1, xx y1,
+      xx (x1 + g_tile_width), xx (y1 + g_tile_height),
+      WHITE
+    );
+  } else if g_tool == .COLLISION_PAINTER {
+    color := COLLISION_COLORS[g_collision_colors_idx];
+    color.w = 0.5;
+    Simp.set_shader_for_color(enable_blend=true);
+    Simp.immediate_quad(
+      cast(float)x1, xx y1, xx (x1 + g_tile_width), xx (y1 + g_tile_height),
+      color
+    );
   }
+
+  immediate_outline(
+    x1, y1,
+    x1 + g_tile_width, y1 + g_tile_height,
+    TILE_BORDER_WIDTH,
+    TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx]
+  );
 }
 
-coord_in_tileset :: (x: s64, y: s64) -> bool {
-  in := true;
-  if x > g_tileset.width in = false;
-  if y < WINDOW_HEIGHT - g_tileset.height in = false;
-  return in;
-}
-
-coord_in_tilemap :: (x: s64, y: s64) -> bool {
-  in := true;
-  if x <= g_tilemap_x || x > g_tilemap_x + g_tilemap_width in = false;
-  if y <= g_tilemap_y || y > g_tilemap_y + g_tilemap_height in = false;
-  return in;
-}
-
-// Assumes `coord_in_tileset` returned `true` on same frame.
+// Not guaranteed to give an index inside the tileset.
 get_tileset_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   tile_x := x / g_tile_width;
   // Tile ID 0 is the top-left tile of the tileset.
@@ -599,11 +619,25 @@ get_tileset_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   return tile_x, tile_y;
 }
 
-// Assumes `coord_in_tilemap` returned `true` on same fame.
+// Not guaranteed to give an index inside the tileset.
+get_tileset_tile_at :: (idx: s64) -> tile_x: s64, tile_y: s64 {
+  tile_y := idx / (g_tileset.width / g_tile_width);
+  tile_x := idx % (g_tileset.width / g_tile_width);
+  return tile_x, tile_y;
+}
+
+// Not guaranteed to give an index inside the tilemap.
 get_tilemap_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   tile_x := (x - g_tilemap_x) / g_tile_width;
   // Tile ID 0 is the top-lef tile of the tilemap.
   tile_y := (g_tilemap_y + g_tilemap_height - y) / g_tile_height;
+  return tile_x, tile_y;
+}
+
+// Not guaranteed to give an index inside the tilemap.
+get_tilemap_tile_at :: (idx: s64) -> tile_x: s64, tile_y: s64 {
+  tile_y := idx / (g_tilemap_width / g_tile_width);
+  tile_x := idx % (g_tilemap_width / g_tile_width);
   return tile_x, tile_y;
 }
 
