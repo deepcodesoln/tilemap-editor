@@ -17,6 +17,7 @@ currently subject to change without a corresponding schema version bump.
 
 ## Controls
 
+- `h`: hide collision on tilemap
 - `m`: switch editor mode between tileset and collision
 - `s`: export the tilemap to the current working directory
 - `t`: switch tool between tile/collision painter and eraser
@@ -41,6 +42,5 @@ license is [here](https://openfontlicense.org).
 
 # TODO
 
-1. paint with collision tiles
-1. export collision map
 1. add spawn tiles, door tiles, etc.?
+1. convert collision and tileset modes into tools (no modes, just tools)

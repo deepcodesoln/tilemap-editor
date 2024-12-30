@@ -34,6 +34,8 @@ COLLISION_COLOR_NAMES :: string.["yellow", "red"];
 
 TARGET_FRAME_TIME_S :: 0.0333;
 
+COLLISION_BIT: u16 = 0x1000;
+
 WHITE       :: Math.Vector4.{1, 1, 1, 1};
 BLACK       :: Math.Vector4.{0, 0, 0, 1};
 GRAY        :: Math.Vector4.{0.7, 0.7, 0.7, 1};
@@ -60,6 +62,7 @@ g_selected_tile_x := -1;
 g_selected_tile_y := -1;
 g_editor_mode := EditorMode.TILESET;
 g_tool := Tool.PAINTER;
+g_hide_collision := false;
 g_tile_highlight_colors_idx := 0;
 g_collision_colors_idx := 0;
 g_tilemap_width := -1;
@@ -311,6 +314,8 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
         g_should_quit = true;
         break;
       }
+    } else if event.key_code == #char "H" && event.key_pressed {
+      g_hide_collision ^= true;
     } else if event.key_code == #char "M" && event.key_pressed {
       if g_editor_mode == .COLLISION {
         g_editor_mode = .TILESET;
@@ -348,9 +353,13 @@ handle_input :: (mouse_x: s64, mouse_y: s64) {
           tile_idx := tile_y * tiles_per_row + tile_x;
           if g_editor_mode == .TILESET && g_selected_tile_idx >= 0 && g_tool == .PAINTER {
             // We reserve `0` to mean no tile.
-            g_tilemap_tiles[tile_idx] = cast(u16)(g_selected_tile_idx + 1);
+            g_tilemap_tiles[tile_idx] = (g_tilemap_tiles[tile_idx] & COLLISION_BIT) + cast(u16)(g_selected_tile_idx + 1);
           } else if g_editor_mode == .TILESET && g_tool == .ERASER {
-            g_tilemap_tiles[tile_idx] = 0;
+            g_tilemap_tiles[tile_idx] &= COLLISION_BIT;
+          } else if g_editor_mode == .COLLISION && g_tool == .PAINTER {
+            g_tilemap_tiles[tile_idx] |= COLLISION_BIT;
+          } else if g_editor_mode == .COLLISION && g_tool == .ERASER {
+            g_tilemap_tiles[tile_idx] &= ~COLLISION_BIT;
           }
         }
         break;
@@ -474,6 +483,14 @@ draw_tileset_pane :: (mouse_x: s64, mouse_y: s64) {
     0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 7),
     WHITE
   );
+
+  text = tprint("collision shown: %", !g_hide_collision);
+  Simp.prepare_text(g_font, text);
+  Simp.draw_prepared_text(
+    g_font,
+    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 8),
+    WHITE
+  );
 }
 
 draw_tray :: (mouse_x: s64, mouse_y: s64) {
@@ -509,18 +526,32 @@ draw_tilemap :: (mouse_x: s64, mouse_y: s64) {
 
   // Draw tilemap.
   for _tileset_idx, tilemap_idx: g_tilemap_tiles {
-    if !_tileset_idx continue; // `0` means no tile.
-    tileset_idx := _tileset_idx - 1;
+    if !_tileset_idx continue; // `0` means no tile, no collision.
+
     tilemap_idx_x := tilemap_idx % (g_tilemap_width / g_tile_width);
     tilemap_idx_y := tilemap_idx / (g_tilemap_width / g_tile_width);
     tilemap_x := g_tilemap_x + tilemap_idx_x * g_tile_width;
     tilemap_y := g_tilemap_y + g_tilemap_height - tilemap_idx_y * g_tile_height - g_tile_height;
-    Simp.set_shader_for_images(*g_tiles[tileset_idx]);
-    Simp.immediate_quad(
-      cast(float)tilemap_x, xx tilemap_y,
-      xx (tilemap_x + g_tile_width), xx (tilemap_y + g_tile_height),
-      WHITE
-    );
+
+    if _tileset_idx & ~COLLISION_BIT {
+      tileset_idx := (_tileset_idx & ~COLLISION_BIT) - 1;
+      Simp.set_shader_for_images(*g_tiles[tileset_idx]);
+      Simp.immediate_quad(
+        cast(float)tilemap_x, xx tilemap_y,
+        xx (tilemap_x + g_tile_width), xx (tilemap_y + g_tile_height),
+        WHITE
+      );
+    }
+    if _tileset_idx & COLLISION_BIT && !g_hide_collision {
+      color := COLLISION_COLORS[g_collision_colors_idx];
+      color.w = 0.5;
+      Simp.set_shader_for_color(enable_blend=true);
+      Simp.immediate_quad(
+        cast(float)tilemap_x, xx tilemap_y,
+        xx (tilemap_x + g_tile_width), xx (tilemap_y + g_tile_height),
+        color
+      );
+    }
   }
 
   // Draw selected tile from tileset, collision, or eraser.
@@ -660,6 +691,10 @@ bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) -> [
  * - tilemap width in tiles (s64)
  * - tilemap height in tiles (s64)
  * - tilemap bytes (u16 * above length)
+ *
+ * Tilemap IDs are 2 bytes, encoded as follows:
+ * - MSB (bit 15): 1: collision; 0: no collision
+ * - bits 14 - 0 : tile ID; tile ID `0` means "no tile"
  */
 export_tilemap :: (tileset_path: string, tilemap: [] u16) -> export_pathname: string, ok: bool {
   if g_tilemap_tiles.count <= 0 {
