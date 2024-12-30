@@ -125,16 +125,6 @@ init_from_cmd :: () -> success: bool {
   }
 }
 
-// * - format version (u16)
-// * - tileset file name length (s64)
-// * - tileset file name (u8 * above length)
-// * - tile width in pixels (s64)
-// * - tile height in pixels (s64)
-// * - tilemap width in tiles (s64)
-// * - tilemap height in tiles (s64)
-// * - tilemap bytes (u16 * above length)
-
-// Currently only supports tilemap version 0.
 init_from_tilemap :: (cmd_args: [] string) -> bool {
   tilemap, ok := File.file_open(cmd_args[1]);
 
@@ -680,8 +670,7 @@ bitmap_to_tiles :: (bitmap: Simp.Bitmap, tile_width: s64, tile_height: s64) -> [
 }
 
 /**
- * Write tilemap out as binary in the following order. This documentation is for
- * format version 0.
+ * Write tilemap out as binary in the following order.
  *
  * - format version (u16)
  * - tileset file name length (s64)
@@ -703,60 +692,31 @@ export_tilemap :: (tileset_path: string, tilemap: [] u16) -> export_pathname: st
   }
 
   export_pathname :: "tilemap.bin";
-
   file, ok := File.file_open(export_pathname, for_writing=true);
   if !ok {
     print("error opening file for tilemap export\n");
     return "", false;
   }
 
+  builder: String_Builder;
+  init_string_builder(*builder);
+
   // Have to write from a variable, not a constant, since Jai may inline constants.
   tilemap_format_version := SUPPORTED_TILEMAP_VERSION;
-  ok = File.file_write(*file, *tilemap_format_version, size_of(type_of(tilemap_format_version)));
-  if !ok {
-    print("error writing version to file for tilemap export\n");
-    return "", false;
-  }
-
-  ok = File.file_write(*file, *tileset_path.count, size_of(type_of(tileset_path.count)));
-  if !ok {
-    print("error writing tileset path count to file for tilemap export\n");
-    return "", false;
-  }
-
-  ok = File.file_write(*file, tileset_path.data, tileset_path.count);
-  if !ok {
-    print("error writing tileset path to file for tilemap export\n");
-    return "", false;
-  }
-
-  ok = File.file_write(*file, *g_tile_width, size_of(type_of(g_tile_width)));
-  if !ok {
-    print("error writing tile width to file for tilemap export\n");
-    return "", false;
-  }
-
-  ok = File.file_write(*file, *g_tile_height, size_of(type_of(g_tile_height)));
-  if !ok {
-    print("error writing tile height to file for tilemap export\n");
-    return "", false;
-  }
-
+  append(*builder, cast(*u8)*tilemap_format_version, size_of(type_of(tilemap_format_version)));
+  append(*builder, cast(*u8)*tileset_path.count, size_of(type_of(tileset_path.count)));
+  append(*builder, tileset_path.data, tileset_path.count);
+  append(*builder, cast(*u8)*g_tile_width, size_of(type_of(g_tile_width)));
+  append(*builder, cast(*u8)*g_tile_height, size_of(type_of(g_tile_height)));
   tilemap_width_tiles := g_tilemap_width / g_tile_width;
-  ok = File.file_write(*file, *tilemap_width_tiles, size_of(type_of(tilemap_width_tiles)));
-  if !ok {
-    print("error writing tilemap width to file for tilemap export\n");
-    return "", false;
-  }
-
+  append(*builder, cast(*u8)*tilemap_width_tiles, size_of(type_of(tilemap_width_tiles)));
   tilemap_height_tiles := g_tilemap_height / g_tile_height;
-  ok = File.file_write(*file, *tilemap_height_tiles, size_of(type_of(tilemap_height_tiles)));
-  if !ok {
-    print("error writing tilemap height to file for tilemap export\n");
-    return "", false;
-  }
+  append(*builder, cast(*u8)*tilemap_height_tiles, size_of(type_of(tilemap_height_tiles)));
+  append(*builder, cast(*u8)g_tilemap_tiles.data, size_of(u16) * g_tilemap_tiles.count);
 
-  ok = File.file_write(*file, g_tilemap_tiles.data, size_of(u16) * g_tilemap_tiles.count);
+  buff := builder_to_string(*builder);
+  defer free(buff);
+  ok = File.file_write(*file, buff.data, buff.count);
   if !ok {
     print("error writing tilemap to file for tilemap export\n");
     return "", false;
