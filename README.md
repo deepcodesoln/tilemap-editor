@@ -18,13 +18,13 @@ currently subject to change without a corresponding schema version bump.
 ## Controls
 
 - `m`: switch editor mode between tileset and collision
+- `s`: export the tilemap to the current working directory
 - `t`: switch tool between tile/collision painter and eraser
 
 **Tileset Mode**
 
 - mouse: select tiles from the tileset and paint them on the tilemap
 - `c`: change the tileset highlight color
-- `s`: export the tilemap to the current working directory
 
 **Collision Mode**
 
