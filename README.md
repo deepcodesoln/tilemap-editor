@@ -18,6 +18,7 @@ currently subject to change without a corresponding schema version bump.
 ## Controls
 
 - `m`: switch editor mode between tileset and collision
+- `t`: switch tool between tile/collision painter and eraser
 
 **Tileset Mode**
 
