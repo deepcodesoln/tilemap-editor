@@ -46,3 +46,4 @@ license is [here](https://openfontlicense.org).
 1. implement tilemap undo-paint feature
 1. add ability to select tilemap areas and then paint or delete
 1. make the UI layout more robust (currently very sensitive to tileset size)
+   1. support user-specified tilemap sizes; need to support zooming, panning

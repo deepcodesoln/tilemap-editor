@@ -17,15 +17,16 @@ Tool :: enum {
 
 SUPPORTED_TILEMAP_VERSION: u16 = 0;
 
-// This group of constants is all measured in pixels.
-TILE_BORDER_WIDTH :: 1;
-MAX_TILEMAP_WIDTH :: 600;
-MAX_TILEMAP_HEIGHT :: 600;
-TILESET_VERT_DIV_WIDTH :: 2;
-TRAY_HORIZ_DIV_WIDTH :: 2;
-WINDOW_WIDTH :: 1000;
-WINDOW_HEIGHT :: 650;
-TRAY_TEXT_PADDING :: 4;
+// The pane widths are intentionally evenly divisible by 16.
+TILESET_PANE_WIDTH_PX :: 400;
+TILEMAP_PANE_WIDTH_PX :: 608;
+DIVIDER_WIDTH_PX :: 2;
+WINDOW_WIDTH_PX :: TILESET_PANE_WIDTH_PX + TILEMAP_PANE_WIDTH_PX + DIVIDER_WIDTH_PX;
+WINDOW_HEIGHT_PX :: 650;
+TRAY_TEXT_PADDING_PX :: 4;
+
+TILE_BORDER_WIDTH_PX :: 1;
+MAX_TILEMAP_HEIGHT_PX :: 600;
 
 TILE_HIGHLIGHT_COLORS :: Math.Vector4.[LIGHT_BLUE, GREEN];
 TILE_HIGHLIGHT_COLOR_NAMES :: string.["light blue", "green"];
@@ -73,7 +74,7 @@ g_tilemap_cursor_idx := 0;
 
 main :: () {
   window := WindowCreation.create_window(
-    window_name="tilemap editor", width=WINDOW_WIDTH, height=WINDOW_HEIGHT
+    window_name="tilemap editor", width=WINDOW_WIDTH_PX, height=WINDOW_HEIGHT_PX
   );
   Simp.set_render_target(window);
 
@@ -82,7 +83,7 @@ main :: () {
     print("failed to load font\n");
     return;
   }
-  g_tray_height = g_font.character_height;
+  g_tray_height = g_font.character_height + 2 * TRAY_TEXT_PADDING_PX;
 
   ok := init_from_cmd();
   if !ok return;
@@ -220,12 +221,12 @@ init_from_tilemap :: (cmd_args: [] string) -> bool {
   g_tiles = bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
 
   // Set up tilemap properties.
-  g_tilemap_width = MAX_TILEMAP_WIDTH - MAX_TILEMAP_WIDTH % g_tile_width;
-  g_tilemap_height = MAX_TILEMAP_HEIGHT - MAX_TILEMAP_HEIGHT % g_tile_height;
-  x_padding := (WINDOW_WIDTH - g_tileset.width - TILESET_VERT_DIV_WIDTH - g_tilemap_width) / 2;
-  y_padding := (WINDOW_HEIGHT - g_tray_height - TRAY_HORIZ_DIV_WIDTH - g_tilemap_height) / 2;
-  g_tilemap_x = g_tileset.width + TILESET_VERT_DIV_WIDTH + x_padding;
-  g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH + y_padding;
+  g_tilemap_width = TILEMAP_PANE_WIDTH_PX - TILEMAP_PANE_WIDTH_PX % g_tile_width;
+  g_tilemap_height = MAX_TILEMAP_HEIGHT_PX - MAX_TILEMAP_HEIGHT_PX % g_tile_height;
+  x_padding := (WINDOW_WIDTH_PX - g_tileset.width - DIVIDER_WIDTH_PX - g_tilemap_width) / 2;
+  y_padding := (WINDOW_HEIGHT_PX - g_tray_height - DIVIDER_WIDTH_PX - g_tilemap_height) / 2;
+  g_tilemap_x = g_tileset.width + DIVIDER_WIDTH_PX + x_padding;
+  g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING_PX + DIVIDER_WIDTH_PX + y_padding;
 
   return true;
 }
@@ -255,7 +256,7 @@ init_from_tileset :: (cmd_args: [] string) -> bool {
     g_tile_height, ok, remainder = string_to_int(cmd_args[3], T=s32);
   }
   if !ok {
-    print("failed to parse tileset dimensions\n");
+    print("failed to convert tileset dimensions from CLI to ints\n");
     return false;
   }
   if remainder.count != 0 {
@@ -275,12 +276,13 @@ init_from_tileset :: (cmd_args: [] string) -> bool {
   g_tiles = bitmap_to_tiles(bitmap, g_tile_width, g_tile_height);
 
   // Set up tilemap properties.
-  g_tilemap_width = MAX_TILEMAP_WIDTH - MAX_TILEMAP_WIDTH % g_tile_width;
-  g_tilemap_height = MAX_TILEMAP_HEIGHT - MAX_TILEMAP_HEIGHT % g_tile_height;
-  x_padding := (WINDOW_WIDTH - g_tileset.width - TILESET_VERT_DIV_WIDTH - g_tilemap_width) / 2;
-  y_padding := (WINDOW_HEIGHT - g_tray_height - TRAY_HORIZ_DIV_WIDTH - g_tilemap_height) / 2;
-  g_tilemap_x = g_tileset.width + TILESET_VERT_DIV_WIDTH + x_padding;
-  g_tilemap_y = g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH + y_padding;
+  // TODO(orphen) make these user-provided.
+  g_tilemap_width = TILEMAP_PANE_WIDTH_PX - TILEMAP_PANE_WIDTH_PX % g_tile_width;
+  g_tilemap_height = MAX_TILEMAP_HEIGHT_PX - MAX_TILEMAP_HEIGHT_PX % g_tile_height;
+  x_padding := (WINDOW_WIDTH_PX - TILESET_PANE_WIDTH_PX - DIVIDER_WIDTH_PX - g_tilemap_width) / 2;
+  y_padding := (WINDOW_HEIGHT_PX - g_tray_height - DIVIDER_WIDTH_PX - g_tilemap_height) / 2;
+  g_tilemap_x = TILESET_PANE_WIDTH_PX + DIVIDER_WIDTH_PX + x_padding;
+  g_tilemap_y = g_tray_height + DIVIDER_WIDTH_PX + y_padding;
 
   tilemap_width_tiles := g_tilemap_width / g_tile_width;
   tilemap_height_tiles := g_tilemap_height / g_tile_height;
@@ -402,17 +404,25 @@ draw_tileset_pane :: () {
   // Vertical divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
-    cast(float)g_tileset.width, xx (g_tray_height + TRAY_TEXT_PADDING),
-    xx (g_tileset.width + TILESET_VERT_DIV_WIDTH), xx WINDOW_HEIGHT,
+    cast(float)TILESET_PANE_WIDTH_PX, xx (g_tray_height + TRAY_TEXT_PADDING_PX),
+    xx (TILESET_PANE_WIDTH_PX + DIVIDER_WIDTH_PX), xx WINDOW_HEIGHT_PX,
     DARK_OCEAN
   );
 
   // Tile set.
   Simp.set_shader_for_images(*g_tileset);
   Simp.immediate_quad(
-    0.0, xx (WINDOW_HEIGHT - g_tileset.height),
-    xx g_tileset.width, xx WINDOW_HEIGHT,
+    0.0, xx (WINDOW_HEIGHT_PX - g_tileset.height),
+    xx g_tileset.width, xx WINDOW_HEIGHT_PX,
     WHITE
+  );
+
+  // Horizontal divider.
+  Simp.set_shader_for_color();
+  Simp.immediate_quad(
+    0.0, xx (WINDOW_HEIGHT_PX - g_tileset.height),
+    xx TILESET_PANE_WIDTH_PX, xx (WINDOW_HEIGHT_PX - g_tileset.height - 2),
+    DARK_OCEAN
   );
 
   // Border around active tile in tileset.
@@ -420,11 +430,11 @@ draw_tileset_pane :: () {
     Simp.set_shader_for_color();
     x, y := get_tileset_tile_at(g_tileset_active_idx);
     border_x1 := x * g_tile_width;
-    border_y1 := WINDOW_HEIGHT - (y * g_tile_height) - g_tile_height;
+    border_y1 := WINDOW_HEIGHT_PX - (y * g_tile_height) - g_tile_height;
     immediate_outline(
       border_x1, border_y1,
       border_x1 + g_tile_width, border_y1 + g_tile_height,
-      TILE_BORDER_WIDTH,
+      TILE_BORDER_WIDTH_PX,
       TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx]
     );
   }
@@ -433,7 +443,7 @@ draw_tileset_pane :: () {
   Simp.set_shader_for_color(enable_blend=true);
   x, y := get_tileset_tile_at(g_tileset_cursor_idx);
   border_x1 := x * g_tile_width;
-  border_y1 := WINDOW_HEIGHT - (y * g_tile_height) - g_tile_height;
+  border_y1 := WINDOW_HEIGHT_PX - (y * g_tile_height) - g_tile_height;
   color := TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx];
   color.w = 0.5;
   Simp.immediate_quad(
@@ -443,18 +453,11 @@ draw_tileset_pane :: () {
   );
 
   // Lines of text.
-  Simp.set_shader_for_color();
-  Simp.immediate_quad(
-    0.0, xx (WINDOW_HEIGHT - g_tileset.height),
-    xx g_tileset.width, xx (WINDOW_HEIGHT - g_tileset.height - 2),
-    DARK_OCEAN
-  );
-
   text := tprint("tile width     : %", g_tile_width);
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - g_font.character_height,
+    0, WINDOW_HEIGHT_PX - g_tileset.height - g_font.character_height,
     WHITE
   );
 
@@ -462,7 +465,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 2),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 2),
     WHITE
   );
 
@@ -471,7 +474,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 3),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 3),
     WHITE
   );
 
@@ -484,7 +487,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 4),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 4),
     WHITE
   );
 
@@ -493,7 +496,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 5),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 5),
     WHITE
   );
 
@@ -501,7 +504,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 6),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 6),
     WHITE
   );
 
@@ -509,7 +512,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 7),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 7),
     WHITE
   );
 
@@ -517,7 +520,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 8),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 8),
     WHITE
   );
 
@@ -526,7 +529,7 @@ draw_tileset_pane :: () {
   Simp.prepare_text(g_font, text);
   Simp.draw_prepared_text(
     g_font,
-    0, WINDOW_HEIGHT - g_tileset.height - (g_font.character_height * 9),
+    0, WINDOW_HEIGHT_PX - g_tileset.height - (g_font.character_height * 9),
     WHITE
   );
 }
@@ -535,8 +538,8 @@ draw_tray :: () {
   // Horizontal divider.
   Simp.set_shader_for_color();
   Simp.immediate_quad(
-    0.0, xx (g_tray_height + TRAY_TEXT_PADDING),
-    xx WINDOW_WIDTH, xx (g_tray_height + TRAY_TEXT_PADDING + TRAY_HORIZ_DIV_WIDTH),
+    0.0, xx (g_tray_height + TRAY_TEXT_PADDING_PX),
+    xx WINDOW_WIDTH_PX, xx (g_tray_height + TRAY_TEXT_PADDING_PX + DIVIDER_WIDTH_PX),
     DARK_OCEAN
   );
 }
@@ -606,7 +609,7 @@ draw_tilemap :: () {
   immediate_outline(
     x1, y1,
     x1 + g_tile_width, y1 + g_tile_height,
-    TILE_BORDER_WIDTH,
+    TILE_BORDER_WIDTH_PX,
     TILE_HIGHLIGHT_COLORS[g_tile_highlight_colors_idx]
   );
 }
@@ -615,7 +618,7 @@ draw_tilemap :: () {
 get_tileset_tile_at :: (x: s64, y: s64) -> tile_x: s64, tile_y: s64 {
   tile_x := x / g_tile_width;
   // Tile ID 0 is the top-left tile of the tileset.
-  tile_y := (WINDOW_HEIGHT - y) / g_tile_height;
+  tile_y := (WINDOW_HEIGHT_PX - y) / g_tile_height;
   return tile_x, tile_y;
 }
 
